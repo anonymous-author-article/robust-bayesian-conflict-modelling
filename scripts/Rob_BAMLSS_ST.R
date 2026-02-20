@@ -13,7 +13,7 @@ pacman::p_load(
   bamlss, gamlss.dist, dplyr, tidyr, ggplot2, ggrepel, ggspatial,
   lubridate, sf, spdep, scales, gridExtra, patchwork, ncvreg, mgcv,
   parallel, RColorBrewer, kableExtra, viridis, scoringRules, statmod,
-  boot, coda,stringr,cowplot,geodata,here
+  boot, coda,stringr,cowplot,geodata,here,goftest,ddst
 )
 
 
@@ -82,21 +82,42 @@ df_model <- df_clean %>%
 message("Data prep complete. N: ", nrow(df_model))
 
 
-
+library(grDevices)
 # ==============================================================================
 # 3. EXPLORATORY DATA ANALYSIS: RESPONSE VARIABLE DISTRIBUTION
-#    Assessing the marginal distribution of fatality counts to inform family selection.
+#Assessing the marginal distribution of fatality counts to inform family selection.
 # ==============================================================================
-par(mfrow=c(2,3))
 
-hist(df_model$fatalities, main = "Raw fatality counts", xlab = "Fatalities")
-hist(df_model$fatalities[df_model$fatalities>0], main = "Only fatalities > 0", xlab = "Fatalities")
-hist(df_model$fatalities[df_model$fatalities>1], main = "Only fatalities > 1", xlab = "Fatalities")
-hist(df_model$fatalities[df_model$fatalities>1 & df_model$fatalities<=60], main = "1 <Fatalities <50", xlab = "Fatalities")
-hist(log(df_model$fatalities +1), main = "log transformation", xlab = "log(Fatality + 1)")
-hist(log(df_model$fatalities/exp(df_model$log_pop)), main = "log rate transformation", xlab = "log(Fatality/Population)")
+grDevices::pdf(here("figures","Datadistribution1.pdf"), width = 14, height = 3.5)  
 
+op<-par(mfrow=c(1,6), oma=c(2.5,2.5,1.4,0),mar=c(1,1,0,0.2),mgp=c(1,0,0),tcl=0.1)
+hist(df_model$fatalities, main = "", xlab = "");box()
+mtext('Raw fatality counts', side=3, line=0)
+mtext('Fatalities', side=1, line=1.2)
+mtext('Frequency', side=2, line=1.2)
 
+hist(df_model$fatalities[df_model$fatalities>0], main = "", xlab = ""); box()
+mtext('Only fatalities > 0', side=3, line=0)
+mtext('Fatalities', side=1, line=1.2)
+
+hist(df_model$fatalities[df_model$fatalities>1], main = "", xlab = ""); box()
+mtext('Only fatalities > 1', side=3, line=0)
+mtext('Fatalities', side=1, line=1.2)
+
+hist(df_model$fatalities[df_model$fatalities>1 & df_model$fatalities<=60], main = "", xlab = ""); box()
+mtext('1 <Fatalities <50', side=3, line=0)
+mtext('Fatalities', side=1, line=1.2)
+
+hist(log(df_model$fatalities +1), main = "", xlab = ""); box()
+mtext('log transformation', side=3, line=0)
+mtext('log(Fatality + 1)', side=1, line=1.2)
+
+hist(log(df_model$fatalities/exp(df_model$log_pop)), main = "", xlab = ""); box()
+mtext('log rate transformation', side=3, line=0)
+mtext('log(Fatality/Population)', side=1, line=1.2)
+
+par(op)
+dev.off()
 # ==============================================================================
 # 4. DESCRIPTIVE TEMPORAL ANALYSIS AND PEAK EVENT IDENTIFICATION
 #    Visualizing temporal trends, seasonality, and identifying high-fatality outlier events
@@ -709,7 +730,6 @@ chains <- 1
 cores <- 1
 
 fitted_models <- list()
-
 fitted_models$ZINB   <- fit_robust_model("ZINB", f_3param, NULL, df_model, ni, nb, chains, cores)
 fitted_models$ZANBI  <- fit_robust_model("ZANBI", f_3param, NULL, df_model, ni, nb, chains, cores)
 fitted_models$PIG    <- fit_robust_model("PIG", f_2param, NULL, df_model, ni, nb, chains, cores)
@@ -725,6 +745,7 @@ fitted_models$RSB    <- fit_robust_model("RSB", f_rsb, f_RSB_mix(a=0.5, b=0.5, n
 #     performing Moran's I test on randomized quantile residuals.
 # ==============================================================================
 
+set.seed(123)
 if(exists("nb_map")) {
   listw_obj <- nb2listw(nb_map, style = "W", zero.policy = TRUE)
 } else {
@@ -776,8 +797,8 @@ get_all_metrics <- function(model_obj, model_name, df_data, listw) {
     DIC = dic_val,
     LogLik = as.numeric(log_lik),
     EDF = df_model, 
-    Max_Rhat = rhat,
-    Min_ESS = ess,
+#    Max_Rhat = rhat,
+#    Min_ESS = ess,
     Outliers_N = n_outliers,
     Outliers_Pct = perc_outliers,
     Moran_I = as.numeric(moran_res$estimate[1]),
@@ -851,16 +872,24 @@ generate_diagnostic_plots <- function(model_list) {
         ylim(-2, 2) + 
         theme_minimal()
       
-      # 3. Influence Plot
+      # 3. Influence Plot (UPDATED HERE)
       df_inf <- data.frame(Index = 1:n, Resid = res)
       outliers <- df_inf %>% filter(abs(Resid) > 3)
+      
+      # Calculate outlier statistics automatically
+      n_outliers <- nrow(outliers)
+      pct_outliers <- round((n_outliers / n) * 100, 2)
+      outlier_text <- paste0("Outliers (>3 sigma): ", n_outliers, " (", pct_outliers, "%)")
       
       p3 <- ggplot(df_inf, aes(x = Index, y = Resid)) +
         geom_hline(yintercept = c(-3, 3), color = "#e74c3c", linetype = "dotted") +
         geom_point(alpha = 0.4, size = 0.5) +
         geom_point(data = outliers, color = "#e74c3c", size = 1.2) +
-        labs(title = "Influence Plot", x = "Index", y = "Residuals") + 
-        theme_minimal()
+        labs(title = "Influence Plot", 
+             subtitle = outlier_text, # Add the dynamic text here
+             x = "Index", y = "Residuals") + 
+        theme_minimal() +
+        theme(plot.subtitle = element_text(color = "#e74c3c", size = 8.5)) # Style it red like the image
       
       (p1 + p2 + p3)
       
@@ -890,7 +919,6 @@ if(length(diag_plots) > 0) {
     print(grid_2)
   }
 }
-
 
 # ==============================================================================
 # 13. SPATIAL RESIDUAL DIAGNOSTICS TO DETECT UNMODELLED CLUSTERING
@@ -949,6 +977,7 @@ if(length(spatial_maps) > 0) {
 # 14. CALIBRATION ASSESSMENT VIA PROBABILITY INTEGRAL TRANSFORM (PIT)
 #     Checking the uniformity of PIT values to assess predictive performance.
 # ==============================================================================
+
 
 get_pit_plots_separate <- function(model, label) {
   
@@ -1029,6 +1058,140 @@ if(length(list_ecdfs) > 0) {
   print(grid_ecdf)
 }
 
+# ==============================================================================
+# 14.1 FORMAL UNIFORMITY TESTING ON PIT VALUES
+#     Calculating KS, Anderson-Darling (AD), Watson (U2), Neyman Smooth (NS), 
+#     and Zamanzade Entropy (TB2) tests.
+# ==============================================================================
+
+# 1. Watson's Circular Statistic (U^2)
+calc_watson <- function(u) {
+  n <- length(u)
+  u_sort <- sort(u)
+  u_bar <- mean(u_sort)
+  i <- 1:n
+  # Cramer-von Mises component
+  W2 <- sum((u_sort - (2*i - 1)/(2*n))^2) + 1/(12*n)
+  # Watson's modification
+  U2 <- W2 - n * (u_bar - 0.5)^2
+  return(U2)
+}
+
+# 2. Zamanzade's Entropy Test (TB2)
+calc_tb2 <- function(u) {
+  n <- length(u)
+  
+  if (n <= 5) { m <- 1 } else if (n <= 8) { m <- 2 } else if (n <= 18) { m <- 3 } 
+  else if (n <= 29) { m <- 4 } else if (n <= 39) { m <- 5 } else if (n <= 100) { m <- 6 } 
+  else if (n <= 150) { m <- 7 } else if (n <= 200) { m <- 8 } else { m <- 9 }
+  
+  u_sort <- sort(u)
+  u_pad <- c(0, u_sort, 1) 
+  
+  num <- u_pad[2:(n+1)] - u_pad[1:n]
+  den <- u_pad[3:(n+2)] - u_pad[1:n]
+  term <- ifelse(den == 0, 0, num/den)
+  F_hat <- (1 / (n + 2)) * (1:n + term)
+  
+  get_val <- function(vec, idx) { vec[pmax(1, pmin(n, idx))] }
+  
+  idx_plus <- (1:n) + m
+  idx_minus <- (1:n) - m
+  
+  diff_u <- get_val(u_sort, idx_plus) - get_val(u_sort, idx_minus)
+  diff_F <- get_val(F_hat, idx_plus) - get_val(F_hat, idx_minus)
+  
+  valid <- diff_F > 0 & diff_u > 0
+  sum_diff_F <- sum(diff_F[valid])
+  
+  tb2_val <- sum((diff_F[valid] / sum_diff_F) * log(diff_u[valid] / diff_F[valid]))
+  return(tb2_val)
+}
+
+mc_pvalue <- function(obs_stat, n, nsim = 999, test_type = "watson") {
+  sim_stats <- numeric(nsim)
+  for(i in 1:nsim) {
+    sim_u <- runif(n)
+    if(test_type == "watson") sim_stats[i] <- calc_watson(sim_u)
+    if(test_type == "tb2") sim_stats[i] <- calc_tb2(sim_u)
+  }
+  
+  if(test_type == "watson") {
+    pval <- (sum(sim_stats >= obs_stat) + 1) / (nsim + 1)
+  } else {
+    pval <- (sum(sim_stats <= obs_stat) + 1) / (nsim + 1)
+  }
+  return(pval)
+}
+
+get_uniformity_metrics <- function(model_obj, model_name, n_sample = 2500, nsim = 999) {
+  message(paste("Computing Uniformity Tests for:", model_name))
+  
+  rqr <- tryCatch(residuals(model_obj, type = "quantile"), error = function(e) NULL)
+  if(is.null(rqr) || sum(is.finite(rqr)) < 50) return(NULL)
+  
+  rqr <- rqr[is.finite(rqr)]
+  
+  if(length(rqr) > n_sample) {
+    set.seed(123)
+    rqr <- sample(rqr, n_sample)
+  }
+  
+  pit <- pnorm(rqr)
+  n <- length(pit)
+  
+  # Kolmogorov-Smirnov (KS)
+  ks_res <- suppressWarnings(stats::ks.test(pit, "punif"))
+  
+  # Anderson-Darling (AD)
+  ad_res <- tryCatch(goftest::ad.test(pit, "punif"), error = function(e) list(statistic=NA, p.value=NA))
+  
+  # Watson (U2)
+  watson_stat <- calc_watson(pit)
+  watson_p <- mc_pvalue(watson_stat, n, nsim = nsim, test_type = "watson")
+  
+  # Neyman Smooth Test (NS)
+  ns_res <- tryCatch(ddst::ddst.uniform.test(pit, compute.p = TRUE), error = function(e) list(statistic=NA, p.value=NA))
+  
+  # Zamanzade Entropy (TB2)
+  tb2_stat <- calc_tb2(pit)
+  tb2_p <- mc_pvalue(tb2_stat, n, nsim = nsim, test_type = "tb2")
+  
+  return(data.frame(
+    Model = model_name,
+    KS_Stat = as.numeric(ks_res$statistic),
+    KS_p    = as.numeric(ks_res$p.value),
+    AD_Stat = as.numeric(ad_res$statistic),
+    AD_p    = as.numeric(ad_res$p.value),
+    Watson_Stat = watson_stat,
+    Watson_p    = watson_p,
+    NS_Stat = as.numeric(ns_res$statistic),
+    NS_p    = as.numeric(ns_res$p.value),
+    TB2_Stat = tb2_stat,
+    TB2_p    = tb2_p
+  ))
+}
+
+
+uniformity_list <- list()
+for(name in names(fitted_models)) {
+  if(!is.null(fitted_models[[name]])) {
+    uniformity_list[[name]] <- get_uniformity_metrics(fitted_models[[name]], name, n_sample = 2000, nsim = 999)
+  }
+}
+
+uniformity_table <- do.call(rbind, uniformity_list)
+
+write.csv(uniformity_table, "uniformity_tests_results.csv", row.names = FALSE)
+
+kbl_uniformity <- kableExtra::kbl(uniformity_table, format = "latex", booktabs = TRUE, digits = 3,
+                                  caption = "Results of formal uniformity tests applied to Probability Integral Transform (PIT) values. P-values for Watson's $U_n^2$ and Zamanzade's $TB2$ were approximated via Monte Carlo simulation.",
+                                  col.names = c("Model", "KS", "p-val", "$A_n^2$", "p-val", "$U_n^2$", "p-val", "$N_S$", "p-val", "$TB2$", "p-val"),
+                                  escape = FALSE) %>%
+  kable_styling(latex_options = c("hold_position", "scale_down")) %>%
+  add_header_above(c(" " = 1, "Kolmogorov-Smirnov" = 2, "Anderson-Darling" = 2, "Watson" = 2, "Neyman Smooth" = 2, "Zamanzade Entropy" = 2))
+
+print(kbl_uniformity)
 
 # ==============================================================================
 # 15. POSTERIOR ESTIMATES OF FIXED EFFECTS FOR THE SELECTED MODEL (ZIPIG)
@@ -1305,4 +1468,3 @@ print(g_evolucao)
 
 ggsave(here("figures","Figure_SpatioTemporal_Evolution_ExpectedFatalities.pdf"), 
        g_evolucao, width = 14, height = 9, bg = "white")
-
