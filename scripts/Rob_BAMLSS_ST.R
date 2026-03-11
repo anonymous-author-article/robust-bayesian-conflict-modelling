@@ -13,7 +13,7 @@ pacman::p_load(
   bamlss, gamlss.dist, dplyr, tidyr, ggplot2, ggrepel, ggspatial,
   lubridate, sf, spdep, scales, gridExtra, patchwork, ncvreg, mgcv,
   parallel, RColorBrewer, kableExtra, viridis, scoringRules, statmod,
-  boot, coda,stringr,cowplot,geodata,here,goftest,ddst
+  boot, coda,stringr,cowplot,geodata,here,goftest,ddst,grDevices
 )
 
 
@@ -33,7 +33,6 @@ shapefile <- readRDS(here("data", "cabo_delgado_boundary.rds"))
 
 if(inherits(df_raw, "sf")) df_raw <- st_drop_geometry(df_raw)
 
-# Ensure consistency between administrative boundaries and data records
 common_districts <- intersect(unique(df_raw$admin2), shapefile$NAME_2)
 if(length(common_districts) == 0) stop("ERRO: District names do not match.")
 
@@ -44,13 +43,12 @@ df_clean <- df_raw %>%
   filter(admin2 %in% common_districts) %>%
   distinct(event_id, date, admin2, fatalities, .keep_all = TRUE)
 
-# Constructing the Spatial Adjacency Matrix (Queen's contiguity) and Penalty Matrix
+# Spatial Adjacency Matrix (Queen's contiguity) and Penalty Matrix
 nb_map <- poly2nb(shape_subset, row.names = shape_subset$NAME_2)
 adj_mat <- nb2mat(nb_map, style = "B", zero.policy = TRUE)
 penalty_mat <- diag(rowSums(adj_mat)) - adj_mat
 rownames(penalty_mat) <- colnames(penalty_mat) <- rownames(adj_mat)
 
-# Extracting centroids for spatial interaction terms
 centroids_sf <- st_centroid(shape_subset)
 coords_mat <- st_coordinates(centroids_sf)
 df_coords <- data.frame(NAME_2 = shape_subset$NAME_2, lon = coords_mat[,1], lat = coords_mat[,2])
@@ -60,7 +58,6 @@ vars_to_scale <- c("dist_montepuez_ruby", "dist_balama_graphite",
                    "dist_mueda_Airport", "dist_pemba_Airport",
                    "SEXRATIO", "DEPND", "precip_anomaly")
 
-#Time indexing, factor levelling, and variable scaling (Z-scores)
 df_model <- df_clean %>%
   left_join(df_coords, by = c("admin2" = "NAME_2")) %>%
   mutate(
@@ -82,46 +79,50 @@ df_model <- df_clean %>%
 message("Data prep complete. N: ", nrow(df_model))
 
 
-library(grDevices)
 # ==============================================================================
 # 3. EXPLORATORY DATA ANALYSIS: RESPONSE VARIABLE DISTRIBUTION
-#Assessing the marginal distribution of fatality counts to inform family selection.
 # ==============================================================================
 
+par(op)
 grDevices::pdf(here("figures","Datadistribution1.pdf"), width = 14, height = 3.5)  
 
 op<-par(mfrow=c(1,6), oma=c(2.5,2.5,1.4,0),mar=c(1,1,0,0.2),mgp=c(1,0,0),tcl=0.1)
+# Plot 1
 hist(df_model$fatalities, main = "", xlab = "");box()
-mtext('Raw fatality counts', side=3, line=0)
+mtext('(a) Raw fatality counts', side=3, line=0)
 mtext('Fatalities', side=1, line=1.2)
 mtext('Frequency', side=2, line=1.2)
 
+# Plot 2
 hist(df_model$fatalities[df_model$fatalities>0], main = "", xlab = ""); box()
-mtext('Only fatalities > 0', side=3, line=0)
+mtext('(b) Only fatalities > 0', side=3, line=0)
 mtext('Fatalities', side=1, line=1.2)
 
+# Plot 3
 hist(df_model$fatalities[df_model$fatalities>1], main = "", xlab = ""); box()
-mtext('Only fatalities > 1', side=3, line=0)
+mtext('(c) Only fatalities > 1', side=3, line=0)
 mtext('Fatalities', side=1, line=1.2)
 
+# Plot 4
 hist(df_model$fatalities[df_model$fatalities>1 & df_model$fatalities<=60], main = "", xlab = ""); box()
-mtext('1 <Fatalities <50', side=3, line=0)
+mtext('(d) 1 <Fatalities <50', side=3, line=0)
 mtext('Fatalities', side=1, line=1.2)
 
+# Plot 5
 hist(log(df_model$fatalities +1), main = "", xlab = ""); box()
-mtext('log transformation', side=3, line=0)
+mtext('(e) log transformation', side=3, line=0)
 mtext('log(Fatality + 1)', side=1, line=1.2)
 
-hist(log(df_model$fatalities/exp(df_model$log_pop)), main = "", xlab = ""); box()
-mtext('log rate transformation', side=3, line=0)
-mtext('log(Fatality/Population)', side=1, line=1.2)
+# Plot 6
+p_seq <- seq(0, 1, by = 0.01)
+q_vals <- quantile(df_model$fatalities, probs = p_seq)
+plot(p_seq, q_vals, type = "s", main = "", xlab = "", ylab = ""); box()
+mtext('(f) Empirical Quantiles', side=3, line=0)
+mtext(expression('Probability'~tau), side=1, line=1.2)
 
-par(op)
 dev.off()
 # ==============================================================================
 # 4. DESCRIPTIVE TEMPORAL ANALYSIS AND PEAK EVENT IDENTIFICATION
-#    Visualizing temporal trends, seasonality, and identifying high-fatality outlier events
-#    to produce Figure 1 (Descriptive Analysis).
 # ==============================================================================
 
 theme_set(theme_bw(base_size = 12) + 
@@ -209,12 +210,12 @@ df_phases_rect <- data.frame(
                  levels = c("1. Local Funding", "2. Transition", "3. Regional")),
   y_text = max(df_timeline$total_fatalities) * 0.95
 )%>%
-mutate(Phase= case_when(
-  Phase=="1. Local Funding" ~ "1",
-  Phase=="2. Transition" ~ "2",
-  Phase=="3. Regional" ~ "3"
-  
-))
+  mutate(Phase= case_when(
+    Phase=="1. Local Funding" ~ "1",
+    Phase=="2. Transition" ~ "2",
+    Phase=="3. Regional" ~ "3"
+    
+  ))
 
 cols_combined <- c(palette_pts, "Trend (Loess)" = "#c0392b") 
 
@@ -270,8 +271,8 @@ g_timeline <- ggplot() +
                      values = c(cols_combined, "Trend (Loess)" = "#c0392b"),
                      breaks = c("Trend (Loess)")) + 
   labs(subtitle = "Observed fatalities and peak events",
-    y = "Monthly Fatalities (Total)",
-    x = NULL) + 
+       y = "Monthly Fatalities (Total)",
+       x = NULL) + 
   theme(
     legend.position = c(0.85, 0.9),
     legend.box = "horizontal",
@@ -596,8 +597,6 @@ f_RSB_mix <- function(a = 0.5, b = 0.5, n_quad = 60, grid_max = 50) {
 
 # ==============================================================================
 # 9. ALGORITHM FOR BAYESIAN MODEL FITTING
-#    A wrapper function handling the optimization phase (posterior mode finding)
-#    followed by MCMC sampling (GMCMC) with convergence checks.
 # ==============================================================================
 
 fit_robust_model <- function(label, formula_list, custom_fam_obj = NULL, df, 
@@ -684,8 +683,8 @@ fit_robust_model <- function(label, formula_list, custom_fam_obj = NULL, df,
   conv_report <- list(Rhat = NA, ESS = NA)
   try({
     smp <- bamlss::bamlss.get.samples(mod, combine = FALSE)
-
-      if(!is.null(smp)) {
+    
+    if(!is.null(smp)) {
       mcmc_list <- as.mcmc.list(lapply(smp, as.mcmc))
       conv_report$ESS <- tryCatch(effectiveSize(mcmc_list), error=function(e) NA)
       if(chains > 1) {
@@ -701,8 +700,6 @@ fit_robust_model <- function(label, formula_list, custom_fam_obj = NULL, df,
 
 # ==============================================================================
 # 10. MODEL SPECIFICATION AND ESTIMATION OF CANDIDATE DISTRIBUTIONAL FAMILIES
-#     Defining the GAMLSS predictor formulas (Location, Scale, Shape) and iterating
-#     through the candidate models (ZINB, ZIPIG, Sichel, etc.).
 # ==============================================================================
 
 f_mu_robust <- fatalities ~ 
@@ -741,8 +738,6 @@ fitted_models$RSB    <- fit_robust_model("RSB", f_rsb, f_RSB_mix(a=0.5, b=0.5, n
 
 # ==============================================================================
 # 11. COMPUTATION OF GOODNESS-OF-FIT CRITERIA AND RESIDUAL SPATIAL AUTOCORRELATION
-#     Aggregating WAIC, DIC, Log-Likelihood, Convergence stats (Rhat/ESS), and 
-#     performing Moran's I test on randomized quantile residuals.
 # ==============================================================================
 
 set.seed(123)
@@ -797,8 +792,8 @@ get_all_metrics <- function(model_obj, model_name, df_data, listw) {
     DIC = dic_val,
     LogLik = as.numeric(log_lik),
     EDF = df_model, 
-#    Max_Rhat = rhat,
-#    Min_ESS = ess,
+    #    Max_Rhat = rhat,
+    #    Min_ESS = ess,
     Outliers_N = n_outliers,
     Outliers_Pct = perc_outliers,
     Moran_I = as.numeric(moran_res$estimate[1]),
@@ -876,7 +871,6 @@ generate_diagnostic_plots <- function(model_list) {
       df_inf <- data.frame(Index = 1:n, Resid = res)
       outliers <- df_inf %>% filter(abs(Resid) > 3)
       
-      # Calculate outlier statistics automatically
       n_outliers <- nrow(outliers)
       pct_outliers <- round((n_outliers / n) * 100, 2)
       outlier_text <- paste0("Outliers (>3 sigma): ", n_outliers, " (", pct_outliers, "%)")
@@ -886,10 +880,10 @@ generate_diagnostic_plots <- function(model_list) {
         geom_point(alpha = 0.4, size = 0.5) +
         geom_point(data = outliers, color = "#e74c3c", size = 1.2) +
         labs(title = "Influence Plot", 
-             subtitle = outlier_text, # Add the dynamic text here
+             subtitle = outlier_text, 
              x = "Index", y = "Residuals") + 
         theme_minimal() +
-        theme(plot.subtitle = element_text(color = "#e74c3c", size = 8.5)) # Style it red like the image
+        theme(plot.subtitle = element_text(color = "#e74c3c", size = 8.5)) 
       
       (p1 + p2 + p3)
       
@@ -975,7 +969,6 @@ if(length(spatial_maps) > 0) {
 
 # ==============================================================================
 # 14. CALIBRATION ASSESSMENT VIA PROBABILITY INTEGRAL TRANSFORM (PIT)
-#     Checking the uniformity of PIT values to assess predictive performance.
 # ==============================================================================
 
 
@@ -1060,7 +1053,7 @@ if(length(list_ecdfs) > 0) {
 
 # ==============================================================================
 # 14.1 FORMAL UNIFORMITY TESTING ON PIT VALUES
-#     Calculating KS, Anderson-Darling (AD), Watson (U2), Neyman Smooth (NS), 
+#      KS, Anderson-Darling (AD), Watson (U2), Neyman Smooth (NS), 
 #     and Zamanzade Entropy (TB2) tests.
 # ==============================================================================
 
@@ -1070,9 +1063,7 @@ calc_watson <- function(u) {
   u_sort <- sort(u)
   u_bar <- mean(u_sort)
   i <- 1:n
-  # Cramer-von Mises component
   W2 <- sum((u_sort - (2*i - 1)/(2*n))^2) + 1/(12*n)
-  # Watson's modification
   U2 <- W2 - n * (u_bar - 0.5)^2
   return(U2)
 }
@@ -1263,7 +1254,6 @@ ggsave(here("figures","Figure_Fixed_Effects_Forest.pdf"), g_forest, width = 12, 
 
 # ==============================================================================
 # 16. VISUALIZATION OF NON-LINEAR SMOOTH EFFECTS ON THE LOCATION PARAMETER
-#     Plotting the partial effects of penalized splines (P-splines) for key covariates.
 # ==============================================================================
 
 get_smooth_effect <- function(model, dataset, term_full, var_name, parameter) {
@@ -1359,8 +1349,6 @@ ggsave(here("figures", "Figure_NonLinear_Effects_Mu_Final.pdf"),
 
 # ==============================================================================
 # 17. SPATIO-TEMPORAL EVOLUTION OF EXPECTED FATALITY RISK
-#     Mapping the posterior expected fatalities across years to visualize the 
-#     diffusion of conflict intensity.
 # ==============================================================================
 
 model_obj <- fitted_models$ZIPIG
