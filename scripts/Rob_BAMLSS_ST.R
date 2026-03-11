@@ -82,8 +82,6 @@ message("Data prep complete. N: ", nrow(df_model))
 # ==============================================================================
 # 3. EXPLORATORY DATA ANALYSIS: RESPONSE VARIABLE DISTRIBUTION
 # ==============================================================================
-
-par(op)
 grDevices::pdf(here("figures","Datadistribution1.pdf"), width = 14, height = 3.5)  
 
 op<-par(mfrow=c(1,6), oma=c(2.5,2.5,1.4,0),mar=c(1,1,0,0.2),mgp=c(1,0,0),tcl=0.1)
@@ -120,6 +118,7 @@ plot(p_seq, q_vals, type = "s", main = "", xlab = "", ylab = ""); box()
 mtext('(f) Empirical Quantiles', side=3, line=0)
 mtext(expression('Probability'~tau), side=1, line=1.2)
 
+par(op)
 dev.off()
 # ==============================================================================
 # 4. DESCRIPTIVE TEMPORAL ANALYSIS AND PEAK EVENT IDENTIFICATION
